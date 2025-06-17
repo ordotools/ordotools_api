@@ -1,0 +1,18 @@
+# Core FastAPI dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# OrdoTools - Traditional Catholic Calendar (always latest)
+ordotools
+
+# Additional FastAPI features
+python-multipart>=0.0.6
+
+# Testing dependencies
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+httpx>=0.24.0
+
+# Optional: Development and debugging
+python-dotenv>=1.0.0
