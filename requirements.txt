@@ -2,8 +2,13 @@
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 
-# OrdoTools - Traditional Catholic Calendar (always latest)
-ordotools
+# OrdoTools - Traditional Catholic Calendar
+# NOTE: Currently installing from GitHub (development version)
+# CHANGE TO: ordotools (when officially released on PyPI)
+git+https://github.com/ordotools/ordotools.git
+
+# Alternative for stable release (when available):
+# ordotools>=1.0.0
 
 # Additional FastAPI features
 python-multipart>=0.0.6
