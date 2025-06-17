@@ -35,6 +35,7 @@ class OrdoDay(BaseModel):
     feast_rank: Optional[str] = None
     saint_of_day: Optional[str] = None
     commemorations: List[str] = []
+    readings: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
 
 class APIStatus(BaseModel):
@@ -45,7 +46,7 @@ class APIStatus(BaseModel):
 # Cache for liturgical calendars
 _calendar_cache = {}
 
-def get_calendar(year: int) -> Dict:
+def get_calendar(year: int) -> List:
     """Get or create liturgical calendar for a year"""
     if not ORDOTOOLS_AVAILABLE:
         raise HTTPException(
@@ -62,37 +63,46 @@ def get_calendar(year: int) -> Dict:
     
     return _calendar_cache[year]
 
+def find_date_in_calendar(calendar_data: List, target_date: date) -> object:
+    """Find a specific date in the calendar data"""
+    target_str = target_date.isoformat()
+    
+    for day_data in calendar_data:
+        if hasattr(day_data, 'date'):
+            date_str = str(day_data.date)
+            if len(date_str) >= 10 and date_str[:10] == target_str:
+                return day_data
+    
+    return None
+
 def get_ordo_for_date(target_date: date) -> OrdoDay:
     """Get ordo data for a specific date"""
     calendar_data = get_calendar(target_date.year)
     
-    # Find the specific date in the calendar data
-    date_key = target_date.strftime("%Y-%m-%d")
-    
-    # The structure depends on how ordotools returns data
-    # You might need to adjust this based on the actual structure
-    day_data = None
-    for day in calendar_data:  # Assuming calendar_data is iterable
-        if hasattr(day, 'date') and day.date == target_date:
-            day_data = day
-            break
-        elif isinstance(day, dict) and day.get('date') == date_key:
-            day_data = day
-            break
+    day_data = find_date_in_calendar(calendar_data, target_date)
     
     if not day_data:
         raise HTTPException(status_code=404, detail=f"No data found for date {target_date}")
     
-    # Extract data based on ordotools structure
+    # Extract commemorations
+    commemorations = []
+    if hasattr(day_data, '_com_1') and day_data._com_1 and hasattr(day_data._com_1, 'name') and day_data._com_1.name:
+        commemorations.append(day_data._com_1.name)
+    if hasattr(day_data, '_com_2') and day_data._com_2 and hasattr(day_data._com_2, 'name') and day_data._com_2.name:
+        commemorations.append(day_data._com_2.name)
+    if hasattr(day_data, '_com_3') and day_data._com_3 and hasattr(day_data._com_3, 'name') and day_data._com_3.name:
+        commemorations.append(day_data._com_3.name)
+    
     return OrdoDay(
         date=target_date,
-        liturgical_season=getattr(day_data, 'season', day_data.get('season') if isinstance(day_data, dict) else None),
-        liturgical_color=getattr(day_data, 'color', day_data.get('color') if isinstance(day_data, dict) else None),
-        feast_name=getattr(day_data, 'feast', day_data.get('feast') if isinstance(day_data, dict) else None),
-        feast_rank=getattr(day_data, 'rank', day_data.get('rank') if isinstance(day_data, dict) else None),
-        saint_of_day=getattr(day_data, 'saint', day_data.get('saint') if isinstance(day_data, dict) else None),
-        commemorations=getattr(day_data, 'commemorations', day_data.get('commemorations', []) if isinstance(day_data, dict) else []),
-        notes="Data from ordotools"
+        liturgical_season=None,
+        liturgical_color=getattr(day_data, 'color', None),
+        feast_name=getattr(day_data, '_name', None),
+        feast_rank=getattr(day_data, 'rank_v', None),
+        saint_of_day=None,
+        commemorations=commemorations,
+        readings=getattr(day_data, 'mass', None),
+        notes=f"ID: {getattr(day_data, 'id', 'Unknown')}"
     )
 
 # Endpoints
@@ -136,7 +146,6 @@ async def get_month(year: int, month: int):
         try:
             days.append(get_ordo_for_date(target_date))
         except HTTPException:
-            # Skip days that don't have data
             continue
     
     return {
@@ -154,28 +163,19 @@ async def get_year(year: int):
     
     calendar_data = get_calendar(year)
     
+    # Convert Feast objects to dictionaries for JSON serialization
+    year_data = []
+    for feast in calendar_data:
+        try:
+            ordo_day = get_ordo_for_date(datetime.strptime(str(feast.date)[:10], "%Y-%m-%d").date())
+            year_data.append(ordo_day.dict())
+        except:
+            continue
+    
     return {
         "year": year,
-        "calendar": calendar_data
-    }
-
-@app.get("/debug/{year}")
-async def debug_calendar(year: int):
-    """Debug endpoint to see raw calendar structure"""
-    calendar_data = get_calendar(year)
-    
-    # Return first few items to understand structure
-    if isinstance(calendar_data, list):
-        sample = calendar_data[:5] if len(calendar_data) > 5 else calendar_data
-    elif isinstance(calendar_data, dict):
-        sample = dict(list(calendar_data.items())[:5])
-    else:
-        sample = str(calendar_data)[:1000]
-    
-    return {
-        "type": str(type(calendar_data)),
-        "length": len(calendar_data) if hasattr(calendar_data, '__len__') else "unknown",
-        "sample": sample
+        "total_days": len(year_data),
+        "calendar": year_data
     }
 
 if __name__ == "__main__":
