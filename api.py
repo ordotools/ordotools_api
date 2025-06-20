@@ -4,13 +4,20 @@ from pydantic import BaseModel
 from datetime import datetime, date
 from typing import List, Optional, Dict, Any
 import os
+import json
+import shutil
+from pathlib import Path
+import pickle
 
 # Import ordotools
 try:
     from ordotools import LiturgicalCalendar
+    import ordotools
     ORDOTOOLS_AVAILABLE = True
+    ORDOTOOLS_VERSION = getattr(ordotools, '__version__', 'unknown')
 except ImportError:
     ORDOTOOLS_AVAILABLE = False
+    ORDOTOOLS_VERSION = None
 
 app = FastAPI(
     title="OrdoTools Calendar API",
@@ -25,6 +32,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Cache configuration
+CACHE_BASE_DIR = Path("ordotools_cache")
+CACHE_BASE_DIR.mkdir(exist_ok=True)
 
 # Models
 class OrdoDay(BaseModel):
@@ -41,27 +52,113 @@ class OrdoDay(BaseModel):
 class APIStatus(BaseModel):
     status: str
     ordotools_available: bool
+    ordotools_version: Optional[str]
+    cache_directory: Optional[str]
     timestamp: str
 
-# Cache for liturgical calendars
+# In-memory cache for quick access
 _calendar_cache = {}
 
-def get_calendar(year: int) -> List:
-    """Get or create liturgical calendar for a year"""
+def get_cache_dir() -> Path:
+    """Get the current cache directory based on ordotools version"""
+    if not ORDOTOOLS_AVAILABLE:
+        return None
+    return CACHE_BASE_DIR / f"v_{ORDOTOOLS_VERSION}"
+
+def get_cache_file_path(year: int, calendar_type: str = "roman", locale: str = "la") -> Path:
+    """Get the cache file path for specific parameters"""
+    cache_dir = get_cache_dir()
+    if not cache_dir:
+        return None
+    
+    filename = f"{year}_{calendar_type}_{locale}.pkl"
+    return cache_dir / filename
+
+def cleanup_old_cache_dirs():
+    """Remove old cache directories that don't match current version"""
+    if not ORDOTOOLS_AVAILABLE:
+        return
+    
+    current_cache_dir = get_cache_dir()
+    
+    for cache_dir in CACHE_BASE_DIR.iterdir():
+        if cache_dir.is_dir() and cache_dir != current_cache_dir:
+            print(f"Removing old cache directory: {cache_dir}")
+            shutil.rmtree(cache_dir)
+
+def load_calendar_from_cache(year: int, calendar_type: str = "roman", locale: str = "la") -> Optional[List]:
+    """Load calendar data from cache file"""
+    cache_file = get_cache_file_path(year, calendar_type, locale)
+    if not cache_file or not cache_file.exists():
+        return None
+    
+    try:
+        with open(cache_file, 'rb') as f:
+            return pickle.load(f)
+    except Exception as e:
+        print(f"Error loading cache file {cache_file}: {e}")
+        # Remove corrupted cache file
+        try:
+            cache_file.unlink()
+        except:
+            pass
+        return None
+
+def save_calendar_to_cache(calendar_data: List, year: int, calendar_type: str = "roman", locale: str = "la"):
+    """Save calendar data to cache file"""
+    cache_file = get_cache_file_path(year, calendar_type, locale)
+    if not cache_file:
+        return
+    
+    # Ensure cache directory exists
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        with open(cache_file, 'wb') as f:
+            pickle.dump(calendar_data, f)
+        print(f"Saved calendar data to cache: {cache_file}")
+    except Exception as e:
+        print(f"Error saving cache file {cache_file}: {e}")
+
+def get_calendar(year: int, calendar_type: str = "roman", locale: str = "la") -> List:
+    """Get or create liturgical calendar for a year with file-based caching"""
     if not ORDOTOOLS_AVAILABLE:
         raise HTTPException(
             status_code=503, 
             detail="ordotools not available. Install with: pip install git+https://github.com/ordotools/ordotools.git"
         )
     
-    if year not in _calendar_cache:
-        try:
-            calendar = LiturgicalCalendar(year, "roman", "la")
-            _calendar_cache[year] = calendar.build()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error building calendar: {str(e)}")
+    # Create cache key for in-memory cache
+    cache_key = f"{year}_{calendar_type}_{locale}"
     
-    return _calendar_cache[year]
+    # Check in-memory cache first
+    if cache_key in _calendar_cache:
+        return _calendar_cache[cache_key]
+    
+    # Check file cache
+    calendar_data = load_calendar_from_cache(year, calendar_type, locale)
+    if calendar_data:
+        print(f"Loaded calendar {cache_key} from file cache")
+        _calendar_cache[cache_key] = calendar_data
+        return calendar_data
+    
+    # Generate calendar data if not cached
+    try:
+        print(f"Generating calendar {cache_key} with ordotools...")
+        calendar = LiturgicalCalendar(year, calendar_type, locale)
+        calendar_data = calendar.build()
+        
+        # Save to both caches
+        _calendar_cache[cache_key] = calendar_data
+        save_calendar_to_cache(calendar_data, year, calendar_type, locale)
+        
+        # Clean up old cache directories after successful generation
+        cleanup_old_cache_dirs()
+        
+        return calendar_data
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error building calendar: {str(e)}")
 
 def find_date_in_calendar(calendar_data: List, target_date: date) -> object:
     """Find a specific date in the calendar data"""
@@ -75,9 +172,9 @@ def find_date_in_calendar(calendar_data: List, target_date: date) -> object:
     
     return None
 
-def get_ordo_for_date(target_date: date) -> OrdoDay:
+def get_ordo_for_date(target_date: date, calendar_type: str = "roman", locale: str = "la") -> OrdoDay:
     """Get ordo data for a specific date"""
-    calendar_data = get_calendar(target_date.year)
+    calendar_data = get_calendar(target_date.year, calendar_type, locale)
     
     day_data = find_date_in_calendar(calendar_data, target_date)
     
@@ -108,9 +205,12 @@ def get_ordo_for_date(target_date: date) -> OrdoDay:
 # Endpoints
 @app.get("/", response_model=APIStatus)
 async def root():
+    cache_dir = get_cache_dir()
     return APIStatus(
         status="healthy",
         ordotools_available=ORDOTOOLS_AVAILABLE,
+        ordotools_version=ORDOTOOLS_VERSION,
+        cache_directory=str(cache_dir) if cache_dir else None,
         timestamp=datetime.now().isoformat()
     )
 
@@ -176,6 +276,45 @@ async def get_year(year: int):
         "year": year,
         "total_days": len(year_data),
         "calendar": year_data
+    }
+
+@app.post("/cache/clear")
+async def clear_cache():
+    """Clear all cached data"""
+    global _calendar_cache
+    _calendar_cache.clear()
+    
+    # Remove all cache directories
+    if CACHE_BASE_DIR.exists():
+        shutil.rmtree(CACHE_BASE_DIR)
+        CACHE_BASE_DIR.mkdir(exist_ok=True)
+    
+    return {"message": "Cache cleared successfully"}
+
+@app.get("/cache/status")
+async def cache_status():
+    """Get cache status information"""
+    cache_dir = get_cache_dir()
+    cache_files = []
+    
+    if cache_dir and cache_dir.exists():
+        for cache_file in cache_dir.glob("*.pkl"):
+            try:
+                stat = cache_file.stat()
+                cache_files.append({
+                    "filename": cache_file.name,
+                    "size_bytes": stat.st_size,
+                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
+            except:
+                continue
+    
+    return {
+        "ordotools_version": ORDOTOOLS_VERSION,
+        "cache_directory": str(cache_dir) if cache_dir else None,
+        "in_memory_cache_keys": list(_calendar_cache.keys()),
+        "cached_files": cache_files,
+        "total_cached_files": len(cache_files)
     }
 
 if __name__ == "__main__":
