@@ -85,17 +85,63 @@ app.add_middleware(
 CACHE_BASE_DIR = Path("ordotools_cache")
 CACHE_BASE_DIR.mkdir(exist_ok=True)
 
-# Models
+# Enhanced Models
+class Reading(BaseModel):
+    """Reading information"""
+    reference: Optional[str] = None
+    text: Optional[str] = None
+    type: Optional[str] = None  # epistle, gospel, gradual, etc.
+
+class MassProper(BaseModel):
+    """Mass proper information"""
+    introit: Optional[str] = None
+    gradual: Optional[str] = None
+    epistle: Optional[Reading] = None
+    gospel: Optional[Reading] = None
+    offertory: Optional[str] = None
+    secret: Optional[str] = None
+    communion: Optional[str] = None
+    postcommunion: Optional[str] = None
+    collect: Optional[str] = None
+
+class Commemoration(BaseModel):
+    """Commemoration information"""
+    name: Optional[str] = None
+    rank: Optional[str] = None
+    color: Optional[str] = None
+    notes: Optional[str] = None
+
 class OrdoDay(BaseModel):
+    """Complete ordo day information"""
     date: date
-    liturgical_season: Optional[str] = None
-    liturgical_color: Optional[str] = None
+    
+    # Primary feast/day information
     feast_name: Optional[str] = None
     feast_rank: Optional[str] = None
+    feast_id: Optional[str] = None
+    
+    # Liturgical information
+    liturgical_season: Optional[str] = None
+    liturgical_color: Optional[str] = None
+    liturgical_grade: Optional[str] = None
+    
+    # Saints and commemorations
     saint_of_day: Optional[str] = None
-    commemorations: List[str] = []
+    commemorations: List[Commemoration] = []
+    
+    # Mass information
+    mass_proper: Optional[MassProper] = None
     readings: Optional[Dict[str, Any]] = None
+    
+    # Additional properties
+    is_sunday: bool = False
+    is_holy_day: bool = False
+    is_fast_day: bool = False
+    is_ember_day: bool = False
+    
+    # Raw data for debugging
     notes: Optional[str] = None
+    raw_data: Optional[Dict[str, Any]] = None
 
 class APIStatus(BaseModel):
     status: str
@@ -168,6 +214,77 @@ def save_calendar_to_cache(calendar_data: List, year: int, calendar_type: str = 
     except Exception as e:
         print(f"Error saving cache file {cache_file}: {e}")
 
+def extract_readings(day_data) -> Optional[MassProper]:
+    """Extract mass proper and readings from day data"""
+    try:
+        mass_data = getattr(day_data, 'mass', None)
+        if not mass_data:
+            return None
+        
+        # Initialize readings
+        mass_proper = MassProper()
+        
+        # Extract basic parts with safe string conversion
+        mass_proper.introit = str(getattr(mass_data, 'introit', '')) if getattr(mass_data, 'introit', None) else None
+        mass_proper.gradual = str(getattr(mass_data, 'gradual', '')) if getattr(mass_data, 'gradual', None) else None
+        mass_proper.offertory = str(getattr(mass_data, 'offertory', '')) if getattr(mass_data, 'offertory', None) else None
+        mass_proper.secret = str(getattr(mass_data, 'secret', '')) if getattr(mass_data, 'secret', None) else None
+        mass_proper.communion = str(getattr(mass_data, 'communion', '')) if getattr(mass_data, 'communion', None) else None
+        mass_proper.postcommunion = str(getattr(mass_data, 'postcommunion', '')) if getattr(mass_data, 'postcommunion', None) else None
+        mass_proper.collect = str(getattr(mass_data, 'collect', '')) if getattr(mass_data, 'collect', None) else None
+        
+        # Extract epistle
+        try:
+            epistle_data = getattr(mass_data, 'epistle', None)
+            if epistle_data:
+                mass_proper.epistle = Reading(
+                    reference=str(getattr(epistle_data, 'reference', '')) if getattr(epistle_data, 'reference', None) else None,
+                    text=str(getattr(epistle_data, 'text', '')) if getattr(epistle_data, 'text', None) else None,
+                    type='epistle'
+                )
+        except Exception as e:
+            print(f"Error extracting epistle: {e}")
+        
+        # Extract gospel
+        try:
+            gospel_data = getattr(mass_data, 'gospel', None)
+            if gospel_data:
+                mass_proper.gospel = Reading(
+                    reference=str(getattr(gospel_data, 'reference', '')) if getattr(gospel_data, 'reference', None) else None,
+                    text=str(getattr(gospel_data, 'text', '')) if getattr(gospel_data, 'text', None) else None,
+                    type='gospel'
+                )
+        except Exception as e:
+            print(f"Error extracting gospel: {e}")
+        
+        return mass_proper
+    except Exception as e:
+        print(f"Error extracting readings: {e}")
+        return None
+
+def extract_commemorations(day_data) -> List[Commemoration]:
+    """Extract commemorations from day data"""
+    commemorations = []
+    
+    # Check for commemorations (_com_1, _com_2, _com_3)
+    for i in range(1, 4):
+        com_attr = f'_com_{i}'
+        try:
+            com_data = getattr(day_data, com_attr, None)
+            if com_data and hasattr(com_data, 'name') and com_data.name:
+                commemoration = Commemoration(
+                    name=str(com_data.name) if com_data.name else None,
+                    rank=str(getattr(com_data, 'rank_v', '')) if getattr(com_data, 'rank_v', None) else None,
+                    color=str(getattr(com_data, 'color', '')) if getattr(com_data, 'color', None) else None,
+                    notes=str(getattr(com_data, 'notes', '')) if getattr(com_data, 'notes', None) else None
+                )
+                commemorations.append(commemoration)
+        except Exception as e:
+            print(f"Error extracting commemoration {i}: {e}")
+            continue
+    
+    return commemorations
+
 def get_calendar(year: int, calendar_type: str = "roman", locale: str = "la") -> List:
     """Get or create liturgical calendar for a year with file-based caching"""
     if not ORDOTOOLS_AVAILABLE:
@@ -220,8 +337,33 @@ def find_date_in_calendar(calendar_data: List, target_date: date) -> object:
     
     return None
 
+def serialize_object_safely(obj) -> Dict[str, Any]:
+    """Safely serialize an object to a dictionary"""
+    if obj is None:
+        return {}
+    
+    result = {}
+    for attr in dir(obj):
+        if not attr.startswith('_') and not callable(getattr(obj, attr)):
+            try:
+                value = getattr(obj, attr)
+                if value is None:
+                    result[attr] = None
+                elif isinstance(value, (str, int, float, bool)):
+                    result[attr] = value
+                elif isinstance(value, (list, tuple)):
+                    result[attr] = [serialize_object_safely(item) if hasattr(item, '__dict__') else str(item) for item in value]
+                elif hasattr(value, '__dict__'):
+                    result[attr] = serialize_object_safely(value)
+                else:
+                    result[attr] = str(value)
+            except Exception as e:
+                # Skip attributes that can't be serialized
+                continue
+    return result
+
 def get_ordo_for_date(target_date: date, calendar_type: str = "roman", locale: str = "la") -> OrdoDay:
-    """Get ordo data for a specific date"""
+    """Get complete ordo data for a specific date"""
     calendar_data = get_calendar(target_date.year, calendar_type, locale)
     
     day_data = find_date_in_calendar(calendar_data, target_date)
@@ -229,26 +371,62 @@ def get_ordo_for_date(target_date: date, calendar_type: str = "roman", locale: s
     if not day_data:
         raise HTTPException(status_code=404, detail=f"No data found for date {target_date}")
     
-    # Extract commemorations
-    commemorations = []
-    if hasattr(day_data, '_com_1') and day_data._com_1 and hasattr(day_data._com_1, 'name') and day_data._com_1.name:
-        commemorations.append(day_data._com_1.name)
-    if hasattr(day_data, '_com_2') and day_data._com_2 and hasattr(day_data._com_2, 'name') and day_data._com_2.name:
-        commemorations.append(day_data._com_2.name)
-    if hasattr(day_data, '_com_3') and day_data._com_3 and hasattr(day_data._com_3, 'name') and day_data._com_3.name:
-        commemorations.append(day_data._com_3.name)
-    
-    return OrdoDay(
-        date=target_date,
-        liturgical_season=None,
-        liturgical_color=getattr(day_data, 'color', None),
-        feast_name=getattr(day_data, '_name', None),
-        feast_rank=getattr(day_data, 'rank_v', None),
-        saint_of_day=None,
-        commemorations=commemorations,
-        readings=getattr(day_data, 'mass', None),
-        notes=f"ID: {getattr(day_data, 'id', 'Unknown')}"
-    )
+    try:
+        # Extract commemorations
+        commemorations = extract_commemorations(day_data)
+        
+        # Extract mass proper
+        mass_proper = extract_readings(day_data)
+        
+        # Determine liturgical properties
+        is_sunday = target_date.weekday() == 6  # Sunday is 6 in Python
+        feast_rank = str(getattr(day_data, 'rank_v', '')) if getattr(day_data, 'rank_v', None) else None
+        is_holy_day = feast_rank and feast_rank.lower() in ['duplex', 'totum duplex', 'feast'] if feast_rank else False
+        
+        # Create comprehensive ordo day
+        ordo_day = OrdoDay(
+            date=target_date,
+            
+            # Primary feast information
+            feast_name=str(getattr(day_data, '_name', '')) if getattr(day_data, '_name', None) else None,
+            feast_rank=feast_rank,
+            feast_id=str(getattr(day_data, 'id', '')) if getattr(day_data, 'id', None) is not None else None,
+            
+            # Liturgical information
+            liturgical_season=str(getattr(day_data, 'season', '')) if getattr(day_data, 'season', None) else None,
+            liturgical_color=str(getattr(day_data, 'color', '')) if getattr(day_data, 'color', None) else None,
+            liturgical_grade=str(getattr(day_data, 'grade', '')) if getattr(day_data, 'grade', None) else None,
+            
+            # Saints and commemorations
+            saint_of_day=None,  # Could be extracted from feast_name if it's a saint
+            commemorations=commemorations,
+            
+            # Mass information
+            mass_proper=mass_proper,
+            readings=serialize_object_safely(getattr(day_data, 'mass', None)),
+            
+            # Additional properties
+            is_sunday=is_sunday,
+            is_holy_day=is_holy_day,
+            is_fast_day=False,  # Would need to be determined from rules
+            is_ember_day=False,  # Would need to be determined from rules
+            
+            # Debug information
+            notes=f"ID: {getattr(day_data, 'id', 'Unknown')}, Rank: {getattr(day_data, 'rank_v', 'Unknown')}",
+            raw_data=serialize_object_safely(day_data)
+        )
+        
+        return ordo_day
+        
+    except Exception as e:
+        print(f"Error creating OrdoDay for {target_date}: {e}")
+        # Return a minimal fallback ordo day
+        return OrdoDay(
+            date=target_date,
+            feast_name="Error loading data",
+            liturgical_color="green",
+            notes=f"Error: {str(e)}"
+        )
 
 # Endpoints
 @app.get("/", response_model=APIStatus)
@@ -311,11 +489,12 @@ async def get_year(year: int):
     
     calendar_data = get_calendar(year)
     
-    # Convert Feast objects to dictionaries for JSON serialization
+    # Convert Feast objects to OrdoDay objects
     year_data = []
     for feast in calendar_data:
         try:
-            ordo_day = get_ordo_for_date(datetime.strptime(str(feast.date)[:10], "%Y-%m-%d").date())
+            target_date = datetime.strptime(str(feast.date)[:10], "%Y-%m-%d").date()
+            ordo_day = get_ordo_for_date(target_date)
             year_data.append(ordo_day.dict())
         except:
             continue
