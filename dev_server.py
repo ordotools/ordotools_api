@@ -1,8 +1,8 @@
 import uvicorn
-import os
-from fastapi import FastAPI
+# import os
+# from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+# from fastapi.staticfiles import StaticFiles
 
 from api import app
 
@@ -11,7 +11,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "http://localhost:8080", 
+        "http://localhost:8080",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:8080",
         "http://localhost:5500",  # Live Server default
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     print("📡 API will be available at: http://localhost:8000")
     print("📖 Docs available at: http://localhost:8000/docs")
     print("🌐 CORS enabled for local frontend development")
-    
+
     uvicorn.run(
         "dev_server:app",
         host="0.0.0.0",

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🚀 Starting OrdoTools API on Render..."
+echo "🚀 Starting OrdoTools API..."
 
 # Run cache warmup
 echo "📚 Running cache warmup..."

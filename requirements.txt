@@ -3,9 +3,10 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 
 # OrdoTools - Traditional Catholic Calendar
-# NOTE: Currently installing from GitHub (development version)
+# NOTE: Currently installing from GitHub: (development version)
 # CHANGE TO: ordotools (when officially released on PyPI)
-git+https://github.com/ordotools/ordotools.git
+# TODO: remove the SHA after the refactor
+git+https://github.com/ordotools/ordotools.git@aee0470dd301f8ab668d9732e65a7f6c4f09e24d
 
 # Alternative for stable release (when available):
 # ordotools>=1.0.0
